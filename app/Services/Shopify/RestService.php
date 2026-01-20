@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Services\Shopify;
+use Illuminate\Support\Facades\Log;
 
 class RestService extends BaseShopifyService
 {
