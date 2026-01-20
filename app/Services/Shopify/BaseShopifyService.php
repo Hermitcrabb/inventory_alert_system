@@ -50,13 +50,13 @@ abstract class BaseShopifyService
     
     protected function rateLimitCheck(string $apiType = 'rest'): void
     {
-        $key = "shopify_rate_limit:{$this->shopDomain}:{$apiType}";
-        $limit = config("shopify.rate_limit.{$apiType}", 40);
+        $key = "services.shopify_rate_limit:{$this->shopDomain}:{$apiType}";
+        $limit = config("services.shopify.rate_limit.{$apiType}", 40);
         
         $count = Cache::get($key, 0);
         
         if ($count >= $limit) {
-            sleep(config('shopify.rate_limit.retry_after', 2));
+            sleep(config('services.shopify.rate_limit.retry_after', 2));
         }
         
         Cache::put($key, $count + 1, 60);

@@ -96,17 +96,27 @@ class WebhookService extends RestService
             $baseUrl = 'http://localhost';
         }
         
-        $url = rtrim($baseUrl, '/') . '/webhooks/' . $type;
+        // Clean up URL and add project path if needed
+        $baseUrl = rtrim($baseUrl, '/');
+        
+        // Check if base URL already includes the project path
+        // If not, and we're in a subdirectory, add it
+        $projectPath = '/inventory_alert_system/public';
+        if (strpos($baseUrl, $projectPath) === false && strpos(url(''), $projectPath) !== false) {
+            $baseUrl .= $projectPath;
+        }
+        
+        $url = $baseUrl . '/webhooks/' . $type;
         
         Log::info('Webhook URL generated', [
             'base_url' => $baseUrl,
             'webhook_url' => $url,
-            'type' => $type
+            'type' => $type,
+            'full_url_used' => url('/webhooks/' . $type)
         ]);
         
         return $url;
     }
-    
     /**
      * List existing webhooks
      */
