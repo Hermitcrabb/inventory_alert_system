@@ -332,8 +332,4 @@ class WebhookController extends Controller
         $parts = explode('/', $gid);
         return (int) end($parts);
     }
-    
-    /**
-     * Test endpoint to verify webhook setup
-     */
 }
