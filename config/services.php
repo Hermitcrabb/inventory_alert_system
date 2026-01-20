@@ -36,10 +36,11 @@ return [
     ],
 
     'shopify' => [
-        'store_domain' => env('SHOPIFY_STORE_DOMAIN'),
-        'admin_token' => env('SHOPIFY_ADMIN_TOKEN'),
-        'webhook_secret' => env('SHOPIFY_WEBHOOK_SECRET'),
+        'store_domain' => config('shopify.store_domain'),
+        'admin_token' => config('shopify.admin_token'),
+        'ngrok_url' => config('shopify.ngrok_url'),
+        'webhook_secret' => config('shopify.webhook_secret'),
         'scopes' => env('SHOPIFY_SCOPES', 'read_products,read_inventory'),
-],
+    ],
 
 ];
