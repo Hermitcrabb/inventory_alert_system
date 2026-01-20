@@ -10,6 +10,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use App\Models\Shop;
 use App\Models\Product;
+use App\Services\Shopify\GraphQLService;
 
 class SyncShopifyProducts implements ShouldQueue
 {
@@ -27,7 +28,12 @@ class SyncShopifyProducts implements ShouldQueue
         Log::info('=== STARTING PRODUCT SYNC ===', ['shop' => $this->shop->shopify_domain]);
         
         try {
-            $graphQLService = $this->shop->getGraphQLService();
+            // Instantiate GraphQL service directly
+            $graphQLService = new GraphQLService(
+                $this->shop->shopify_domain,
+                $this->shop->access_token
+            );
+            
             $cursor = null;
             $hasNextPage = true;
             $syncedCount = 0;
@@ -102,6 +108,12 @@ class SyncShopifyProducts implements ShouldQueue
                 continue;
             }
             
+            // Extract inventory item ID safely
+            $inventoryItemId = null;
+            if (isset($variant['inventoryItem']['id'])) {
+                $inventoryItemId = $this->extractId($variant['inventoryItem']['id']);
+            }
+            
             // Prepare data with defaults for empty fields
             $productData = [
                 'shop_id' => $this->shop->id,
@@ -111,8 +123,7 @@ class SyncShopifyProducts implements ShouldQueue
                 'handle' => $productNode['handle'] ?? null,
                 'sku' => $variant['sku'] ?? 'N/A',
                 'current_inventory' => $variant['inventoryQuantity'] ?? 0,
-                'inventory_item_id' => isset($variant['inventoryItem']['id']) ? 
-                    $this->extractId($variant['inventoryItem']['id']) : null,
+                'inventory_item_id' => $inventoryItemId,
                 'product_type' => $productNode['productType'] ?? 'Uncategorized',
                 'vendor' => $productNode['vendor'] ?? 'Unknown',
                 'status' => $productNode['status'] ?? 'active',
@@ -121,7 +132,7 @@ class SyncShopifyProducts implements ShouldQueue
                 'last_synced_at' => now(),
             ];
             
-            // Save product
+            // Save product - use combination of shop_id and shopify_variant_id as unique key
             Product::updateOrCreate(
                 [
                     'shop_id' => $productData['shop_id'],
