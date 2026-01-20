@@ -6,7 +6,8 @@ use App\Http\Controllers\ShopifyController;
 use App\Http\Controllers\WebhookController;
 use App\Http\Controllers\ProductsController;
 
-Route::match(['GET', 'POST', 'PUT', 'DELETE'], '/debug-route/{path?}', function($path = null) {
+// TEMPORARY DEBUG ROUTE
+Route::match(['GET', 'POST'], '/debug-route/{path?}', function($path = null) {
     return response()->json([
         'request_uri' => $_SERVER['REQUEST_URI'] ?? 'none',
         'path_info' => $_SERVER['PATH_INFO'] ?? 'none',
@@ -14,27 +15,14 @@ Route::match(['GET', 'POST', 'PUT', 'DELETE'], '/debug-route/{path?}', function(
         'request_method' => request()->method(),
         'full_url' => request()->fullUrl(),
         'path' => request()->path(),
-        'all_routes' => collect(Route::getRoutes()->getRoutes())->map(function($route) {
-            return [
-                'uri' => $route->uri,
-                'methods' => $route->methods,
-                'name' => $route->getName()
-            ];
-        })->toArray()
+        'laravel_working' => true
     ]);
 })->where('path', '.*');
 
-// Simple test route
-Route::post('/test-post-route', function() {
-    return response()->json(['test_post' => 'works']);
-});
-
-Route::get('/test-get-route', function() {
-    return response()->json(['test_get' => 'works']);
-});
-
-// ===== WEBHOOK ROUTES =====
-Route::prefix('webhooks')->group(function () {
+// ===== WEBHOOK ROUTES (NO AUTH, NO CSRF) =====
+Route::prefix('webhooks')->withoutMiddleware([
+    \App\Http\Middleware\VerifyCsrfToken::class
+])->group(function () {
     Route::post('/inventory-update', [WebhookController::class, 'handleInventoryUpdate'])
         ->name('webhooks.inventory.update');
     
@@ -44,58 +32,20 @@ Route::prefix('webhooks')->group(function () {
     Route::post('/app-uninstalled', [WebhookController::class, 'handleAppUninstalled'])
         ->name('webhooks.app.uninstalled');
 
-    Route::post('/test-simple', function() {
-        \Log::info('=== SIMPLE WEBHOOK TEST HIT ===');
-        return response()->json(['webhook_test' => 'works'], 200);
+    // Test endpoint - works with GET for browser testing
+    Route::match(['GET', 'POST'], '/test-simple', function() {
+        \Log::info('=== WEBHOOK TEST HIT ===');
+        
+        if (request()->method() === 'GET') {
+            return "Send POST request to test webhook";
+        }
+        
+        return response()->json([
+            'webhook_test' => 'success',
+            'time' => now()
+        ], 200);
     });
 });
-
-
-
-
-// // ===== TEMPORARY REDIRECT (Fix path mismatch) =====
-// Route::post('/inventory_alert_system/public/webhooks/{endpoint}', function($endpoint) {
-//     // Forward to correct endpoint
-//     $request = request();
-//     $client = new \GuzzleHttp\Client();
-    
-//     try {
-//         $response = $client->post(url("/webhooks/{$endpoint}"), [
-//             'headers' => $request->headers->all(),
-//             'body' => $request->getContent(),
-//             'http_errors' => false
-//         ]);
-        
-//         return response($response->getBody(), $response->getStatusCode());
-//     } catch (\Exception $e) {
-//         \Log::error('Redirect failed: ' . $e->getMessage());
-//         return response()->json(['error' => 'Redirect failed'], 500);
-//     }
-// })->where('endpoint', '.*');
-
-// // ===== WEBHOOK ROUTES =====
-// Route::prefix('webhooks')->group(function () {
-//     Route::post('/inventory-update', [WebhookController::class, 'handleInventoryUpdate'])
-//         ->name('webhooks.inventory.update');
-    
-//     Route::post('/product-update', [WebhookController::class, 'handleProductUpdate'])
-//         ->name('webhooks.product.update');
-    
-//     Route::post('/app-uninstalled', [WebhookController::class, 'handleAppUninstalled'])
-//         ->name('webhooks.app.uninstalled');
-
-//     // Test endpoint - FIXED: removed duplicate /webhooks
-//     Route::post('/test-simple', function() {
-//         \Log::info('=== SIMPLE WEBHOOK TEST HIT ===');
-//         \Log::info('Headers:', request()->headers->all());
-//         \Log::info('Body:', [request()->getContent()]);
-    
-//         $logEntry = date('Y-m-d H:i:s') . " - Test webhook hit\n";
-//         file_put_contents(storage_path('logs/webhook-test.log'), $logEntry, FILE_APPEND);
-    
-//         return response()->json(['success' => true, 'time' => now()], 200);
-//     });
-// });
 
 // ===== AUTHENTICATED ROUTES =====
 Route::middleware(['auth'])->group(function () {
