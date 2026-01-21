@@ -74,7 +74,7 @@
                         </div>
                         <div class="ml-4">
                             <p class="text-sm font-medium text-gray-600">Total Products</p>
-                            <p class="text-2xl font-semibold text-gray-900">{{ $products->total() }}</p>
+                            <p class="text-2xl font-semibold text-gray-900">{{ $products->count() }}</p>
                         </div>
                     </div>
                 </div>
@@ -89,7 +89,7 @@
                         <div class="ml-4">
                             <p class="text-sm font-medium text-gray-600">In Stock</p>
                             <p class="text-2xl font-semibold text-gray-900">
-                                {{ $products->total() - $lowStockCount - $outOfStockCount }}
+                                {{ $products->count() - $lowStockCount - $outOfStockCount }}
                             </p>
                             <p class="text-xs text-gray-500">> 20 units</p>
                         </div>
@@ -133,9 +133,9 @@
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-semibold text-gray-900">Product Inventory</h3>
                         
-                        @if($products->total() > 0)
+                        @if($products->count() > 0)
                         <div class="text-sm text-gray-600">
-                            Showing {{ $products->firstItem() }} to {{ $products->lastItem() }} of {{ $products->total() }} products
+                            Showing {{ $products->firstItem() }} to {{ $products->lastItem() }} of {{ $products->count() }} products
                         </div>
                         @endif
                     </div>

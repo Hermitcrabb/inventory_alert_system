@@ -138,7 +138,7 @@ class WebhookController extends Controller
     {
         Log::debug('Processing inventory update', $data);
         
-        $inventoryItemId = $data['inventory_item_id'] ?? null;
+        $inventoryItemId = $data['inventory_item_id'] ?? $data['id'] ?? null;
         $locationId = $data['location_id'] ?? null;
         $available = (int) ($data['available'] ?? 0);
         $updatedAt = $data['updated_at'] ?? now()->toISOString();
