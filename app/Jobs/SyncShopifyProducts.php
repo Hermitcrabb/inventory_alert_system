@@ -10,129 +10,132 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use App\Models\Shop;
 use App\Models\Product;
-use App\Services\Shopify\GraphQLService;
 
 class SyncShopifyProducts implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
-    
+
     public $timeout = 3600;
     public $tries = 3;
-    
+
     public function __construct(
         private Shop $shop
-    ) {}
-    
+    ) {
+    }
+
     public function handle(): void
     {
-        Log::info('=== STARTING PRODUCT SYNC ===', ['shop' => $this->shop->shopify_domain]);
-        
+        set_time_limit(0);
+        Log::info('=== STARTING PRODUCT SYNC (REST) ===', ['shop' => $this->shop->shopify_domain]);
+
         try {
-            // Instantiate GraphQL service directly
-            $graphQLService = new GraphQLService(
-                $this->shop->shopify_domain,
-                $this->shop->access_token
-            );
-            
-            $cursor = null;
-            $hasNextPage = true;
+            $restService = $this->shop->getRestService();
+            $sinceId = 0;
+            $hasMore = true;
             $syncedCount = 0;
             $skippedCount = 0;
-            $page = 1;
-            
-            while ($hasNextPage) {
-                Log::info("Fetching page {$page}", ['cursor' => $cursor]);
-                
-                $response = $graphQLService->getProductsWithInventory($cursor);
-                
-                if (empty($response['edges'])) {
+
+            while ($hasMore) {
+                Log::info("Fetching products since ID {$sinceId}");
+
+                $previousSinceId = $sinceId;
+
+                // Fetch products using REST Service with since_id
+                $products = $restService->getProducts(250, $sinceId);
+
+                if (empty($products)) {
                     Log::info('No more products to fetch');
+                    $hasMore = false;
                     break;
                 }
-                
-                foreach ($response['edges'] as $edge) {
-                    $productNode = $edge['node'];
-                    $result = $this->syncProductData($productNode);
-                    
+
+                foreach ($products as $productData) {
+                    $result = $this->syncProductData($productData);
+
                     if ($result['synced'] > 0) {
                         $syncedCount += $result['synced'];
                     }
                     $skippedCount += $result['skipped'];
+
+                    // Track max ID for next page
+                    $sinceId = max($sinceId, $productData['id']);
                 }
-                
-                $hasNextPage = $response['pageInfo']['hasNextPage'] ?? false;
-                $cursor = $response['pageInfo']['endCursor'] ?? null;
-                $page++;
-                
+
+                // Safety break: if sinceId didn't advance, we're stuck
+                if ($sinceId <= $previousSinceId) {
+                    Log::warning('Sync stuck: sinceId did not progress', ['sinceId' => $sinceId]);
+                    $hasMore = false;
+                    break;
+                }
+
                 sleep(1); // Rate limiting
             }
-            
+
             // Update shop's last sync time
             $this->shop->update(['last_synced_at' => now()]);
-            
-            Log::info('=== PRODUCT SYNC COMPLETED ===', [
+
+            Log::info('=== PRODUCT SYNC COMPLETED (REST) ===', [
                 'shop' => $this->shop->shopify_domain,
                 'synced_variants' => $syncedCount,
                 'skipped_variants' => $skippedCount,
                 'total_in_db' => Product::where('shop_id', $this->shop->id)->count()
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Product sync failed', [
                 'shop' => $this->shop->shopify_domain,
                 'error' => $e->getMessage()
             ]);
-            
+
             throw $e;
         }
     }
-    
-    private function syncProductData(array $productNode): array
+
+    private function syncProductData(array $product): array
     {
-        $variants = $productNode['variants']['edges'] ?? [];
+        $variants = $product['variants'] ?? [];
         $synced = 0;
         $skipped = 0;
-        
+
         // Skip if no variants
         if (empty($variants)) {
-            Log::debug('Skipping product - no variants', ['title' => $productNode['title']]);
+            Log::debug('Skipping product - no variants', ['title' => $product['title']]);
             return ['synced' => 0, 'skipped' => 1];
         }
-        
-        foreach ($variants as $variantEdge) {
-            $variant = $variantEdge['node'];
-            
+
+        foreach ($variants as $variant) {
+
             // Check if we should skip this variant
-            if ($this->shouldSkipVariant($variant, $productNode)) {
+            if ($this->shouldSkipVariant($variant, $product)) {
                 $skipped++;
                 continue;
             }
-            
-            // Extract inventory item ID safely
-            $inventoryItemId = null;
-            if (isset($variant['inventoryItem']['id'])) {
-                $inventoryItemId = $this->extractId($variant['inventoryItem']['id']);
-            }
-            
+
+            // Extract size from options
+            $size = $this->extractSize($variant, $product);
+
             // Prepare data with defaults for empty fields
             $productData = [
                 'shop_id' => $this->shop->id,
-                'shopify_variant_id' => $this->extractId($variant['id']),
-                'shopify_product_id' => $this->extractId($productNode['id']),
-                'title' => $productNode['title'] ?? 'Unknown Product',
-                'handle' => $productNode['handle'] ?? null,
+                'shopify_variant_id' => $variant['id'],
+                'shopify_product_id' => $product['id'],
+                'title' => $product['title'] ?? 'Unknown Product',
+                'handle' => $product['handle'] ?? null,
                 'sku' => $variant['sku'] ?? 'N/A',
-                'current_inventory' => $variant['inventoryQuantity'] ?? 0,
-                'inventory_item_id' => $inventoryItemId,
-                'product_type' => $productNode['productType'] ?? 'Uncategorized',
-                'vendor' => $productNode['vendor'] ?? 'Unknown',
-                'status' => $productNode['status'] ?? 'active',
+                'size' => $size,
+                // REST API field is 'inventory_quantity'
+                'current_inventory' => $variant['inventory_quantity'] ?? 0,
+                // REST API field is 'inventory_item_id'
+                'inventory_item_id' => $variant['inventory_item_id'] ?? null,
+                'product_type' => $product['product_type'] ?? 'Uncategorized',
+                'vendor' => $product['vendor'] ?? 'Unknown',
+                'status' => $product['status'] ?? 'active',
                 'price' => $this->parsePrice($variant['price'] ?? null),
-                'compare_at_price' => $this->parsePrice($variant['compareAtPrice'] ?? null),
+                'compare_at_price' => $this->parsePrice($variant['compare_at_price'] ?? null),
                 'last_synced_at' => now(),
             ];
-            
-            // Save product - use combination of shop_id and shopify_variant_id as unique key
+
+            // Save product
             Product::updateOrCreate(
                 [
                     'shop_id' => $productData['shop_id'],
@@ -140,69 +143,61 @@ class SyncShopifyProducts implements ShouldQueue
                 ],
                 $productData
             );
-            
+
             $synced++;
-            Log::debug('Synced variant', [
-                'title' => $productData['title'],
-                'sku' => $productData['sku'],
-                'inventory' => $productData['current_inventory']
-            ]);
         }
-        
+
         return ['synced' => $synced, 'skipped' => $skipped];
     }
-    
-    private function shouldSkipVariant(array $variant, array $productNode): bool
+
+    private function shouldSkipVariant(array $variant, array $product): bool
     {
-        // Skip if SKU is empty or null (you can adjust this rule)
-        if (empty($variant['sku']) || $variant['sku'] === null) {
-            Log::debug('Skipping variant - empty SKU', [
-                'product_title' => $productNode['title'],
-                'variant_id' => $this->extractId($variant['id'])
+        // Skip if SKU is empty or null
+        // Note: REST API will have 'sku' key even if empty string
+        if (empty($variant['sku'])) {
+            Log::debug('Skipping variant - empty SKU (REST)', [
+                'product_title' => $product['title'],
+                'variant_id' => $variant['id']
             ]);
             return true;
         }
-        
-        // Skip if inventory is not set (optional rule)
-        if (!isset($variant['inventoryQuantity'])) {
-            Log::debug('Skipping variant - no inventory quantity', [
-                'product_title' => $productNode['title'],
-                'sku' => $variant['sku']
-            ]);
-            return true;
-        }
-        
-        // Skip if price is not set (optional rule)
-        if (empty($variant['price'])) {
-            Log::debug('Skipping variant - no price', [
-                'product_title' => $productNode['title'],
-                'sku' => $variant['sku']
-            ]);
-            return true;
-        }
-        
+
         return false;
     }
-    
+
+    private function extractSize(array $variant, array $product): ?string
+    {
+        $options = $product['options'] ?? [];
+        $sizeOptions = ['size', 'Size', 'SIZE', 'taglia', 'talle', 'taille', 'maß'];
+
+        foreach ($options as $index => $option) {
+            if (in_array($option['name'] ?? '', $sizeOptions)) {
+                $optionKey = 'option' . ($index + 1);
+                return $variant[$optionKey] ?? null;
+            }
+        }
+
+        // Fallback: If only one option exists and it looks like a size
+        if (count($options) === 1 && !empty($variant['option1'])) {
+            return $variant['option1'];
+        }
+
+        return null;
+    }
+
     private function parsePrice($price)
     {
         if (empty($price) || $price === null) {
             return null;
         }
-        
+
         // Remove currency symbols and convert to float
         $price = str_replace(['$', '€', '£', '¥'], '', $price);
         $price = trim($price);
-        
+
         return is_numeric($price) ? (float) $price : null;
     }
-    
-    private function extractId(string $gid): int
-    {
-        $parts = explode('/', $gid);
-        return (int) end($parts);
-    }
-    
+
     public function failed(\Throwable $exception): void
     {
         Log::error('Product sync job failed', [

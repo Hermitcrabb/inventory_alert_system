@@ -13,6 +13,5 @@ class VerifyCsrfToken extends Middleware
         'webhooks/*',
         '/webhooks/*',
         '*/webhooks/*',
-        'inventory_alert_system/public/webhooks/*',
     ];
 }

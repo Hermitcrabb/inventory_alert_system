@@ -6,14 +6,22 @@ use Illuminate\Support\ServiceProvider;
 
 class EventServiceProvider extends ServiceProvider
 {
+
     /**
-     * The event to listener mappings.
+     * The event listener mappings for the application.
+     *
+     * @var array<class-string, array<int, string>>
+     */
+
+    /**
+     * Register services.
      */
     protected $listen = [
         \SocialiteProviders\Manager\SocialiteWasCalled::class => [
             \SocialiteProviders\Shopify\ShopifyExtendSocialite::class.'@handle',
         ],
     ];
+
 
     public function register(): void
     {

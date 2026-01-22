@@ -2,29 +2,31 @@
 
 namespace App\Services\Shopify;
 
+use Illuminate\Support\Facades\Log;
+
 class GraphQLService extends BaseShopifyService
 {
     public function executeQuery(string $query, array $variables = []): array
     {
         $this->rateLimitCheck('graphql');
-        
+
         $endpoint = 'admin/api/2024-01/graphql.json';
-        
+
         $response = $this->makeRequest('post', $endpoint, [
             'query' => $query,
             'variables' => $variables
         ]);
-        
+
         if (isset($response['errors'])) {
             Log::error('GraphQL errors', [
                 'errors' => $response['errors'],
                 'shop' => $this->shopDomain,
             ]);
         }
-        
+
         return $response;
     }
-    
+
     public function getProductsWithInventory(string $cursor = null): array
     {
         $query = '
@@ -65,15 +67,15 @@ class GraphQLService extends BaseShopifyService
                 }
             }
         ';
-        
+
         $response = $this->executeQuery($query, [
             'first' => 50,
             'after' => $cursor
         ]);
-        
+
         return $response['data']['products'] ?? [];
     }
-    
+
     public function getInventoryLevels(array $inventoryItemIds): array
     {
         $query = '
@@ -96,14 +98,14 @@ class GraphQLService extends BaseShopifyService
                 }
             }
         ';
-        
+
         $response = $this->executeQuery($query, [
             'ids' => $inventoryItemIds
         ]);
-        
+
         return $response['data']['nodes'] ?? [];
     }
-    
+
     public function getProductById(string $productId): array
     {
         $query = '
@@ -126,11 +128,11 @@ class GraphQLService extends BaseShopifyService
                 }
             }
         ';
-        
+
         $response = $this->executeQuery($query, [
             'id' => $productId
         ]);
-        
+
         return $response['data']['product'] ?? [];
     }
 }
