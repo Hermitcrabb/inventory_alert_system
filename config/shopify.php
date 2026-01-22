@@ -5,9 +5,6 @@ return [
     'api_secret' => env('SHOPIFY_API_SECRET'),
     'api_version' => env('SHOPIFY_API_VERSION', '2024-01'),
     'webhook_secret' => env('SHOPIFY_WEBHOOK_SECRET'),
-    'store_domain' => env('SHOPIFY_STORE_DOMAIN'),
-    'admin_token' => env('SHOPIFY_ADMIN_TOKEN'),
-    'ngrok_url' => env('SHOPIFY_NGROK_URL'),
     'scopes' => [
         'read_products',
         'read_inventory',

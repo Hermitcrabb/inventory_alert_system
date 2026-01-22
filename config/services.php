@@ -38,9 +38,9 @@ return [
     'shopify' => [
         'store_domain' => env('SHOPIFY_STORE_DOMAIN'),
         'admin_token' => env('SHOPIFY_ADMIN_TOKEN'),
-        'ngrok_url' => env('SHOPIFY_NGROK_URL'),
         'webhook_secret' => env('SHOPIFY_WEBHOOK_SECRET'),
         'scopes' => env('SHOPIFY_SCOPES', 'read_products,read_inventory'),
+        'ngrok_url' => env('NGROK_URL'),
     ],
 
 ];
