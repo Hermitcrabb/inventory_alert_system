@@ -8,8 +8,8 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use App\Models\Shop;
 use App\Models\Product;
+use App\Services\Shopify\RestService;
 
 class SyncShopifyProducts implements ShouldQueue
 {
@@ -18,18 +18,17 @@ class SyncShopifyProducts implements ShouldQueue
     public $timeout = 3600;
     public $tries = 3;
 
-    public function __construct(
-        private Shop $shop
-    ) {
+    public function __construct()
+    {
     }
 
     public function handle(): void
     {
         set_time_limit(0);
-        Log::info('=== STARTING PRODUCT SYNC (REST) ===', ['shop' => $this->shop->shopify_domain]);
+        Log::info('=== STARTING PRODUCT SYNC (REST) ===');
 
         try {
-            $restService = $this->shop->getRestService();
+            $restService = new RestService();
             $sinceId = 0;
             $hasMore = true;
             $syncedCount = 0;
@@ -71,19 +70,14 @@ class SyncShopifyProducts implements ShouldQueue
                 sleep(1); // Rate limiting
             }
 
-            // Update shop's last sync time
-            $this->shop->update(['last_synced_at' => now()]);
-
             Log::info('=== PRODUCT SYNC COMPLETED (REST) ===', [
-                'shop' => $this->shop->shopify_domain,
                 'synced_variants' => $syncedCount,
                 'skipped_variants' => $skippedCount,
-                'total_in_db' => Product::where('shop_id', $this->shop->id)->count()
+                'total_in_db' => Product::count()
             ]);
 
         } catch (\Exception $e) {
             Log::error('Product sync failed', [
-                'shop' => $this->shop->shopify_domain,
                 'error' => $e->getMessage()
             ]);
 
@@ -105,41 +99,44 @@ class SyncShopifyProducts implements ShouldQueue
 
         foreach ($variants as $variant) {
 
-            // Check if we should skip this variant
+            // Check if we should skip this variant (e.g. empty SKU)
             if ($this->shouldSkipVariant($variant, $product)) {
                 $skipped++;
                 continue;
             }
 
-            // Extract size from options
-            $size = $this->extractSize($variant, $product);
+            $inventoryItemId = $variant['inventory_item_id'] ?? null;
+            $quantity = $variant['inventory_quantity'] ?? 0;
+
+            // LOGIC: Only store if quantity <= 20
+            if ($quantity > 20) {
+                // If it's already in our DB but now > 20, we must delete it
+                if ($inventoryItemId) {
+                    $deleted = Product::where('inventory_item_id', $inventoryItemId)->delete();
+                    if ($deleted) {
+                        Log::info('Product removed during sync (quantity > 20)', ['sku' => $variant['sku'], 'quantity' => $quantity]);
+                    }
+                }
+                $skipped++;
+                continue;
+            }
 
             // Prepare data with defaults for empty fields
             $productData = [
-                'shop_id' => $this->shop->id,
-                'shopify_variant_id' => $variant['id'],
-                'shopify_product_id' => $product['id'],
-                'title' => $product['title'] ?? 'Unknown Product',
-                'handle' => $product['handle'] ?? null,
-                'sku' => $variant['sku'] ?? 'N/A',
-                'size' => $size,
-                // REST API field is 'inventory_quantity'
-                'current_inventory' => $variant['inventory_quantity'] ?? 0,
-                // REST API field is 'inventory_item_id'
-                'inventory_item_id' => $variant['inventory_item_id'] ?? null,
-                'product_type' => $product['product_type'] ?? 'Uncategorized',
-                'vendor' => $product['vendor'] ?? 'Unknown',
-                'status' => $product['status'] ?? 'active',
-                'price' => $this->parsePrice($variant['price'] ?? null),
-                'compare_at_price' => $this->parsePrice($variant['compare_at_price'] ?? null),
+                'variant_id' => $variant['id'],
+                'product_id' => $product['id'],
+                'product_title' => $product['title'] ?? 'Unknown Product',
+                'variant_title' => $variant['title'] ?? 'Default Title',
+                'sku' => $variant['sku'],
+                'quantity' => $quantity,
+                'inventory_item_id' => $inventoryItemId,
                 'last_synced_at' => now(),
             ];
 
             // Save product
             Product::updateOrCreate(
                 [
-                    'shop_id' => $productData['shop_id'],
-                    'shopify_variant_id' => $productData['shopify_variant_id'],
+                    'inventory_item_id' => $productData['inventory_item_id'],
                 ],
                 $productData
             );
@@ -153,7 +150,6 @@ class SyncShopifyProducts implements ShouldQueue
     private function shouldSkipVariant(array $variant, array $product): bool
     {
         // Skip if SKU is empty or null
-        // Note: REST API will have 'sku' key even if empty string
         if (empty($variant['sku'])) {
             Log::debug('Skipping variant - empty SKU (REST)', [
                 'product_title' => $product['title'],
@@ -165,43 +161,9 @@ class SyncShopifyProducts implements ShouldQueue
         return false;
     }
 
-    private function extractSize(array $variant, array $product): ?string
-    {
-        $options = $product['options'] ?? [];
-        $sizeOptions = ['size', 'Size', 'SIZE', 'taglia', 'talle', 'taille', 'maß'];
-
-        foreach ($options as $index => $option) {
-            if (in_array($option['name'] ?? '', $sizeOptions)) {
-                $optionKey = 'option' . ($index + 1);
-                return $variant[$optionKey] ?? null;
-            }
-        }
-
-        // Fallback: If only one option exists and it looks like a size
-        if (count($options) === 1 && !empty($variant['option1'])) {
-            return $variant['option1'];
-        }
-
-        return null;
-    }
-
-    private function parsePrice($price)
-    {
-        if (empty($price) || $price === null) {
-            return null;
-        }
-
-        // Remove currency symbols and convert to float
-        $price = str_replace(['$', '€', '£', '¥'], '', $price);
-        $price = trim($price);
-
-        return is_numeric($price) ? (float) $price : null;
-    }
-
     public function failed(\Throwable $exception): void
     {
         Log::error('Product sync job failed', [
-            'shop_id' => $this->shop->id,
             'error' => $exception->getMessage()
         ]);
     }

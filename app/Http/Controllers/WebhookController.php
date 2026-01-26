@@ -4,538 +4,103 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Http;
-use App\Models\Shop;
 use App\Models\Product;
-
-use Illuminate\Support\Facades\Mail;
-use App\Services\Shopify\RestService;
-use App\Services\Shopify\GraphQLService;
-use App\Mail\LowStockAlert;
+use App\Jobs\ProcessInventoryWebhook;
 
 class WebhookController extends Controller
 {
     /**
-     * Handle inventory update webhook from Shopify
+     * Handle incoming Shopify webhooks
      */
-    public function handleInventoryUpdate(Request $request)
+    public function handle(Request $request, $type)
     {
-        Log::info('=== WEBHOOK RECEIVED: Inventory Update ===');
-        Log::info('Payload: ' . json_encode($request->all(), JSON_PRETTY_PRINT));
-
-        // Verify webhook signature
-        if (!$this->verifyWebhook($request)) {
-            Log::warning('Invalid webhook signature', [
-                'hmac_received' => $request->header('X-Shopify-Hmac-SHA256'),
-                'shop_domain' => $request->header('X-Shopify-Shop-Domain')
-            ]);
-            abort(401, 'Invalid webhook signature');
-        }
-
-        $shopDomain = $request->header('X-Shopify-Shop-Domain');
-        $topic = $request->header('X-Shopify-Topic');
-        $webhookId = $request->header('X-Shopify-Webhook-Id');
-
-        Log::info('Webhook validated', [
-            'shop' => $shopDomain,
-            'topic' => $topic,
-            'webhook_id' => $webhookId
-        ]);
-
-        try {
-            // Find shop
-            $shop = Shop::where('shopify_domain', $shopDomain)->first();
-
-            if (!$shop) {
-                Log::error('Shop not found for webhook', ['domain' => $shopDomain]);
-                return response()->json(['error' => 'Shop not found'], 404);
-            }
-
-            // Process inventory update with hybrid logic
-            $result = $this->processInventoryUpdate($shop, $request->all());
-
-            Log::info('Webhook processed successfully', [
-                'shop' => $shopDomain,
-                'product_updated' => $result['product_updated'] ?? false,
-                'inventory_changed' => $result['inventory_changed'] ?? false,
-                'threshold_check' => $result['threshold_check'] ?? false
-            ]);
-
-            return response()->json(['status' => 'success'], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Webhook processing failed', [
-                'shop' => $shopDomain,
-                'error' => $e->getMessage(),
-                'line' => $e->getLine(),
-                'payload' => $request->all()
-            ]);
-
-            return response()->json(['error' => 'Processing failed'], 500);
-        }
-    }
-
-    /**
-     * Handle product create webhook from Shopify
-     */
-    public function handleProductCreate(Request $request)
-    {
-        Log::info('=== WEBHOOK RECEIVED: Product Create ===');
-        Log::info('Payload: ' . json_encode($request->all(), JSON_PRETTY_PRINT));
+        Log::info('Webhook received', ['type' => $type, 'payload' => $request->all()]);
 
         if (!$this->verifyWebhook($request)) {
-            abort(401, 'Invalid webhook signature');
+            return response()->json(['message' => 'Invalid signature'], 401);
         }
 
-        $shopDomain = $request->header('X-Shopify-Shop-Domain');
-
-        try {
-            $shop = Shop::where('shopify_domain', $shopDomain)->first();
-
-            if (!$shop) {
-                return response()->json(['error' => 'Shop not found'], 404);
-            }
-
-            // Reuse update logic as it handles upsert (update or create)
-            $this->processProductUpdate($shop, $request->all());
-
-            Log::info('Product create processed', ['shop' => $shopDomain]);
-
-            return response()->json(['status' => 'success'], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Product create webhook failed', [
-                'shop' => $shopDomain,
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json(['error' => 'Processing failed'], 500);
-        }
-    }
-
-    /**
-     * Handle product update webhook from Shopify
-     */
-    public function handleProductUpdate(Request $request)
-    {
-        Log::info('=== WEBHOOK RECEIVED: Product Update ===');
-        Log::info('Payload: ' . json_encode($request->all(), JSON_PRETTY_PRINT));
-
-        if (!$this->verifyWebhook($request)) {
-            abort(401, 'Invalid webhook signature');
-        }
-
-        $shopDomain = $request->header('X-Shopify-Shop-Domain');
-
-        try {
-            $shop = Shop::where('shopify_domain', $shopDomain)->first();
-
-            if (!$shop) {
-                return response()->json(['error' => 'Shop not found'], 404);
-            }
-
-            // Update product information
-            $this->processProductUpdate($shop, $request->all());
-
-            Log::info('Product update processed', ['shop' => $shopDomain]);
-
-            return response()->json(['status' => 'success'], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Product update webhook failed', [
-                'shop' => $shopDomain,
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json(['error' => 'Processing failed'], 500);
-        }
-    }
-
-    /**
-     * Handle product delete webhook from Shopify
-     */
-    public function handleProductDelete(Request $request)
-    {
-        Log::info('=== WEBHOOK RECEIVED: Product Delete ===');
-        Log::info('Payload: ' . json_encode($request->all(), JSON_PRETTY_PRINT));
-
-        if (!$this->verifyWebhook($request)) {
-            abort(401, 'Invalid webhook signature');
-        }
-
-        $shopDomain = $request->header('X-Shopify-Shop-Domain');
         $data = $request->all();
 
-        try {
-            $shop = Shop::where('shopify_domain', $shopDomain)->first();
+        switch ($type) {
+            case 'inventory-update':
+                ProcessInventoryWebhook::dispatch($data);
+                break;
 
-            if (!$shop) {
-                return response()->json(['error' => 'Shop not found'], 404);
-            }
+            case 'product-delete':
+                if (isset($data['id'])) {
+                    $productId = $data['id'];
+                    $product = Product::where('product_id', $productId)->first();
 
-            $productId = $data['id'] ?? null;
-            if (!$productId) {
-                throw new \Exception('Missing product ID');
-            }
+                    if ($product) {
+                        try {
+                            $users = \App\Models\User::all();
+                            foreach ($users as $user) {
+                                \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\ProductDeletedAlert([
+                                    'product_title' => $product->product_title,
+                                    'sku' => $product->sku,
+                                    'variant_title' => $product->variant_title,
+                                    'quantity' => $product->quantity,
+                                    'inventory_item_id' => $product->inventory_item_id,
+                                ], 'Shopify Webhook'));
 
-            $product = Product::where('shop_id', $shop->id)
-                ->where('shopify_product_id', $productId)
-                ->first();
+                                // Log Alert
+                                \App\Models\AlertLog::log($product->product_id, $user->email, 'delete', $product->quantity);
+                            }
+                        } catch (\Exception $e) {
+                            Log::error('Failed to send deletion email', ['error' => $e->getMessage()]);
+                        }
 
-            if ($product) {
-                $product->delete();
-                Log::info('Product deleted', ['sku' => $product->sku]);
-            } else {
-                Log::warning('Product not found for deletion', ['shopify_id' => $productId]);
-            }
-
-            return response()->json(['status' => 'success'], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Product delete webhook failed', [
-                'shop' => $shopDomain,
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json(['error' => 'Processing failed'], 500);
+                        $product->delete();
+                    }
+                }
+                break;
         }
+
+        return response()->json(['message' => 'Webhook received']);
     }
 
     /**
-     * Handle app uninstalled webhook from Shopify
-     */
-    public function handleAppUninstalled(Request $request)
-    {
-        Log::info('=== WEBHOOK RECEIVED: App Uninstalled ===');
-
-        if (!$this->verifyWebhook($request)) {
-            abort(401, 'Invalid webhook signature');
-        }
-
-        $shopDomain = $request->header('X-Shopify-Shop-Domain');
-
-        try {
-            $shop = Shop::where('shopify_domain', $shopDomain)->first();
-
-            if ($shop) {
-                $shop->update(['status' => 'uninstalled']);
-                Log::info('Shop marked as uninstalled', ['shop' => $shopDomain]);
-            }
-
-            return response()->json(['status' => 'success'], 200);
-
-        } catch (\Exception $e) {
-            Log::error('App uninstalled webhook failed', [
-                'shop' => $shopDomain,
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json(['error' => 'Processing failed'], 500);
-        }
-    }
-
-    /**
-     * Verify Shopify webhook signature
+     * Verify Shopify webhook HMAC signature
      */
     private function verifyWebhook(Request $request): bool
     {
-        $hmacHeader = $request->header('X-Shopify-Hmac-SHA256');
+        $hmacHeader = $request->header('X-Shopify-Hmac-Sha256') ?: $request->header('X-Shopify-Hmac-SHA256');
 
         if (!$hmacHeader) {
+            Log::warning('Webhook verification failed: Missing HMAC header');
             return false;
         }
 
         $data = $request->getContent();
-        $secret = config('services.shopify.webhook_secret');
 
-        if (!$secret) {
-            Log::warning('Webhook secret not configured');
+        //webhook_secret and api_secret 
+        $secrets = array_filter([
+            config('services.shopify.webhook_secret'),
+            config('services.shopify.api_secret'),
+        ]);
+
+        if (empty($secrets)) {
+            Log::error('Webhook verification failed: No Shopify secrets configured');
             return false;
         }
 
-        $calculatedHmac = base64_encode(
-            hash_hmac('sha256', $data, $secret, true)
-        );
+        foreach ($secrets as $secret) {
+            $calculatedHmac = base64_encode(hash_hmac('sha256', $data, $secret, true));
 
-        return hash_equals($hmacHeader, $calculatedHmac);
-    }
-
-    /**
-     * Process inventory update payload
-     */
-    private function processInventoryUpdate(Shop $shop, array $data): array
-    {
-        Log::debug('Processing inventory update', $data);
-
-        $inventoryItemId = $data['inventory_item_id'] ?? $data['id'] ?? null;
-
-        // If still null, try to extract from graphql_api_id
-        if (!$inventoryItemId && isset($data['graphql_api_id'])) {
-            $inventoryItemId = $this->extractIdFromGid($data['graphql_api_id']);
-        }
-
-        if (!$inventoryItemId) {
-            Log::error('Missing inventory_item_id in webhook payload', ['payload' => $data]);
-            throw new \Exception('Missing inventory_item_id in webhook');
-        }
-
-        $locationId = $data['location_id'] ?? null;
-        $available = (int) ($data['available'] ?? 0);
-        $updatedAt = $data['updated_at'] ?? now()->toISOString();
-
-        // Find product by inventory item ID
-        $product = Product::where('shop_id', $shop->id)
-            ->where('inventory_item_id', $inventoryItemId)
-            ->first();
-
-        if (!$product) {
-            // Try to find by extracting ID from inventory_item_id
-            $extractedId = $this->extractIdFromGid($inventoryItemId);
-            $product = Product::where('shop_id', $shop->id)
-                ->where('inventory_item_id', 'like', "%{$extractedId}%")
-                ->first();
-        }
-
-        if (!$product) {
-            Log::warning('Product not found for inventory update', [
-                'inventory_item_id' => $inventoryItemId,
-                'shop_id' => $shop->id
-            ]);
-            return ['product_updated' => false];
-        }
-
-        $oldInventory = $product->current_inventory;
-
-        // --- HYBRID LOGIC START ---
-        // Threshold for critical check (e.g., 10)
-        // If inventory is low (<= 10), use GraphQL for fast, real-time verification
-        // If inventory is high (> 10), use REST (slower is acceptable)
-
-        $verifiedInventory = $available;
-        $verificationMethod = 'webhook_payload';
-
-        if ($available <= 10) {
-            // FAST PATH: GraphQL
-            Log::info('Low stock detected, verifying via GraphQL', ['sku' => $product->sku]);
-            $graphQLService = new GraphQLService($shop->shopify_domain, $shop->access_token);
-
-            // Format ID for GraphQL if needed (usually expects "gid://shopify/InventoryItem/...")
-            // The service method expects array of IDs
-            $invItemGid = "gid://shopify/InventoryItem/{$inventoryItemId}";
-            $inventoryLevels = $graphQLService->getInventoryLevels([$invItemGid]);
-
-            if (!empty($inventoryLevels)) {
-                // Extract available quantity from response
-                // Structure: nodes[0] -> inventoryLevels -> edges[0] -> node -> available
-                $node = $inventoryLevels[0] ?? null;
-                if ($node && isset($node['inventoryLevels']['edges'][0]['node']['available'])) {
-                    $verifiedInventory = (int) $node['inventoryLevels']['edges'][0]['node']['available'];
-                    $verificationMethod = 'graphql';
-                }
-            }
-        } else {
-            // SLOW PATH: REST
-            Log::info('Normal stock level, verifying via REST', ['sku' => $product->sku]);
-            // Simulate delay for REST calls if desired/required by API rate limits, but usually not needed here
-            // sleep(1); 
-
-            $restService = new RestService($shop->shopify_domain, $shop->access_token);
-            $invItemData = $restService->getInventoryLevel($inventoryItemId);
-
-            if (!empty($invItemData) && isset($invItemData['tracked'])) {
-                // To get actual quantity via REST, we usually need inventory_levels endpoint, 
-                // but for this example we'll assume we trust the webhook for high stock 
-                // OR fetch inventory levels separately. 
-                // Ideally we'd call the inventory_levels endpoint for accuracy.
-                // For now, let's use the payload value verified against the item existence.
-                $verificationMethod = 'rest_verified';
-            }
-        }
-
-        // Use the verified quantity
-        $available = $verifiedInventory;
-
-        // --- HYBRID LOGIC END ---
-
-        // Update product inventory
-        $product->update([
-            'current_inventory' => $available,
-            'last_synced_at' => now(),
-        ]);
-
-        Log::info('Inventory updated', [
-            'product_id' => $product->id,
-            'product_title' => $product->title,
-            'sku' => $product->sku,
-            'old_inventory' => $oldInventory,
-            'new_inventory' => $available,
-            'change' => $available - $oldInventory,
-            'method' => $verificationMethod
-        ]);
-
-        // Check if threshold was crossed
-        $thresholdResult = $this->checkInventoryThresholds($product, $oldInventory, $available);
-
-        return [
-            'product_updated' => true,
-            'inventory_changed' => ($oldInventory !== $available),
-            'threshold_check' => $thresholdResult
-        ];
-    }
-
-    /**
-     * Process product update payload
-     */
-    private function processProductUpdate(Shop $shop, array $data): void
-    {
-        $productId = $data['id'] ?? null;
-
-        if (!$productId) {
-            throw new \Exception('Missing product ID in webhook');
-        }
-
-        // Extract numeric ID from GraphQL ID
-        $numericId = $this->extractIdFromGid($productId);
-
-        // Find all variants of this product
-        $products = Product::where('shop_id', $shop->id)
-            ->where('shopify_product_id', $numericId)
-            ->get();
-
-        if ($products->isEmpty()) {
-            Log::warning('Product not found for update', [
-                'product_id' => $numericId,
-                'shop_id' => $shop->id
-            ]);
-            return;
-        }
-
-        // Update basic product info
-        foreach ($products as $product) {
-            $product->update([
-                'title' => $data['title'] ?? $product->title,
-                'product_type' => $data['product_type'] ?? $product->product_type,
-                'vendor' => $data['vendor'] ?? $product->vendor,
-                'status' => $data['status'] ?? $product->status,
-                'last_synced_at' => now(),
-            ]);
-        }
-
-        Log::info('Product info updated', [
-            'product_id' => $numericId,
-            'variants_updated' => $products->count(),
-            'new_title' => $data['title'] ?? 'not_changed'
-        ]);
-    }
-
-    /**
-     * Check if inventory crossed any threshold
-     */
-    private function checkInventoryThresholds(Product $product, int $oldInventory, int $newInventory): array
-    {
-        $thresholds = [20, 15, 10, 5, 4, 3, 2, 1];
-        $triggered = [];
-
-        foreach ($thresholds as $threshold) {
-            // Check if we crossed the threshold (going from above to below)
-            if ($oldInventory > $threshold && $newInventory <= $threshold) {
-                $triggered[] = $threshold;
-
-                Log::info('INVENTORY THRESHOLD TRIGGERED', [
-                    'product_id' => $product->id,
-                    'product_title' => $product->title,
-                    'threshold' => $threshold,
-                    'old_inventory' => $oldInventory,
-                    'new_inventory' => $newInventory
+            if (hash_equals($calculatedHmac, $hmacHeader)) {
+                Log::info('Webhook verified successfully', [
+                    'secret_type' => ($secret === config('services.shopify.webhook_secret')) ? 'webhook_secret' : 'api_secret',
                 ]);
-
-                // Dispatch alert job
-                $this->dispatchAlert($product, $threshold, $oldInventory, $newInventory);
-            }
-
-            // Check if we crossed the threshold (going from below to above)
-            if ($oldInventory <= $threshold && $newInventory > $threshold) {
-                Log::info('Inventory recovered above threshold', [
-                    'product_id' => $product->id,
-                    'threshold' => $threshold,
-                    'old_inventory' => $oldInventory,
-                    'new_inventory' => $newInventory
-                ]);
+                return true;
             }
         }
 
-        return [
-            'thresholds_triggered' => $triggered,
-            'count' => count($triggered)
-        ];
-    }
-
-    /**
-     * Dispatch alert job
-     */
-    private function dispatchAlert(Product $product, int $threshold, int $oldInventory, int $newInventory): void
-    {
-        Log::info('ALERT DISPATCHED: Sending LowStockAlert email', [
-            'product' => $product->title,
-            'threshold' => $threshold,
-            'inventory' => $newInventory
+        Log::warning('Webhook verification failed: HMAC mismatch', [
+            'header' => $hmacHeader,
+            'topic' => $request->header('X-Shopify-Topic'),
         ]);
 
-        // Get shop owner email
-        $shop = $product->shop;
-        $recipient = $shop->email;
-
-        if ($recipient) {
-            try {
-                Mail::to($recipient)->send(new LowStockAlert($product, $newInventory, $threshold));
-                Log::info('Email sent successfully', ['recipient' => $recipient]);
-            } catch (\Exception $e) {
-                Log::error('Failed to send low stock email', ['error' => $e->getMessage()]);
-            }
-        } else {
-            Log::warning('No email found for shop', ['shop_id' => $shop->id]);
-        }
-
-        // Log alert to file as backup
-        $this->logAlert($product, $threshold, $oldInventory, $newInventory);
+        return false;
     }
-
-    /**
-     * Temporary: Log alert instead of emailing
-     */
-    private function logAlert(Product $product, int $threshold, int $oldInventory, int $newInventory): void
-    {
-        $alertLog = storage_path('logs/alerts.log');
-        $message = sprintf(
-            "[%s] ALERT: Product '%s' (SKU: %s) inventory crossed threshold %s. " .
-            "Changed from %s to %s units. Store: %s\n",
-            now()->toDateTimeString(),
-            $product->title,
-            $product->sku,
-            $threshold,
-            $oldInventory,
-            $newInventory,
-            $product->shop->name
-        );
-
-        file_put_contents($alertLog, $message, FILE_APPEND);
-
-        Log::info('Alert logged to file', [
-            'product' => $product->title,
-            'threshold' => $threshold
-        ]);
-    }
-
-    /**
-     * Extract numeric ID from Shopify GraphQL ID
-     */
-    private function extractIdFromGid(string $gid): int
-    {
-        $parts = explode('/', $gid);
-        return (int) end($parts);
-    }
-
-    /**
-     * Test endpoint to verify webhook setup
-     */
 }

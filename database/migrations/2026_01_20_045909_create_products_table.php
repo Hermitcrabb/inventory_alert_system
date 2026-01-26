@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     /**
      * Run the migrations.
      */
@@ -13,25 +12,21 @@ return new class extends Migration
     {
         Schema::create('products', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('shop_id')->constrained()->onDelete('cascade');
-            $table->bigInteger('shopify_product_id');
-            $table->bigInteger('shopify_variant_id');
-            $table->string('title');
-            $table->string('handle')->nullable();
-            $table->string('sku')->nullable();
-            $table->integer('current_inventory')->default(0);
-            $table->string('inventory_item_id')->nullable();
-            $table->string('product_type')->nullable();
-            $table->string('vendor')->nullable();
-            $table->enum('status', ['active', 'archived', 'draft'])->default('active');
-            $table->decimal('price', 10, 2)->nullable();
-            $table->decimal('compare_at_price', 10, 2)->nullable();
+            $table->bigInteger('product_id')->default(0);
+            $table->bigInteger('variant_id')->default(0);
+            $table->string('inventory_item_id')->unique();
+            $table->string('product_title')->default('');
+            $table->string('variant_title')->default('');
+            $table->string('sku'); // Mandatory as requested
+            $table->integer('quantity')->default(0);
+            $table->string('location_id')->default('');
+            $table->integer('last_notified_threshold')->nullable();
             $table->timestamp('last_synced_at')->nullable();
             $table->timestamps();
-            
-            $table->index(['shop_id', 'shopify_product_id']);
-            $table->index(['shop_id', 'current_inventory']);
-            $table->index(['shop_id', 'last_synced_at']);
+
+            $table->index('inventory_item_id');
+            $table->index('quantity');
+            $table->index('sku');
         });
     }
 

@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
-use App\Models\Shop;
 use App\Models\Product;
 use App\Services\Shopify\RestService;
 use App\Services\Shopify\GraphQLService;
@@ -14,174 +13,204 @@ class ProductsController extends Controller
 {
     public function index(Request $request)
     {
-        $user = Auth::user();
-
-        // Get store domain and token from .env
+        // Credentials check
         $storeDomain = config('services.shopify.store_domain');
         $adminToken = config('services.shopify.admin_token');
 
         if (!$storeDomain || !$adminToken) {
             return view('dashboard', [
                 'products' => collect(),
-                'shops' => collect(),
                 'lowStockCount' => 0,
                 'outOfStockCount' => 0,
                 'error' => 'Shopify credentials not configured in .env file'
             ]);
         }
 
-        // Check if store is already connected
-        $shop = Shop::where('shopify_domain', $storeDomain)->first();
+        // Only show products in local DB (which are all <= 20)
+        $products = Product::where('quantity', '<=', 20)
+            ->orderBy('quantity', 'asc')
+            ->orderBy('product_title', 'asc')
+            ->paginate(50);
 
-        // If not connected, auto-connect it
-        if (!$shop) {
-            try {
-                $shop = $this->autoConnectStore($storeDomain, $adminToken, $user);
-            } catch (\Exception $e) {
-                Log::error('Auto-connect failed', ['error' => $e->getMessage()]);
-                return view('dashboard', [
-                    'products' => collect(),
-                    'shops' => collect(),
-                    'lowStockCount' => 0,
-                    'outOfStockCount' => 0,
-                    'error' => 'Failed to connect to Shopify: ' . $e->getMessage()
-                ]);
-            }
-        }
-
-        // Get all products
-        $products = Product::where('shop_id', $shop->id)
-            ->where('sku', '!=', 'N/A') // Skip placeholder SKUs
-            ->whereNotNull('sku') // Skip null SKUs
-            ->where('current_inventory', '>=', 0) // Only products with inventory tracking
-            ->orderBy('current_inventory', 'asc')
-            ->orderBy('title', 'asc')
-            ->paginate(20);
-
-        // Get low stock products
-        $lowStockCount = Product::where('shop_id', $shop->id)
-            ->where('sku', '!=', 'N/A')
-            ->whereNotNull('sku')
-            ->where('current_inventory', '>', 0)
-            ->where('current_inventory', '<=', 20)
+        $lowStockCount = Product::where('quantity', '>', 0)
+            ->where('quantity', '<=', 20)
             ->count();
 
-        // Get out of stock products
-        $outOfStockCount = Product::where('shop_id', $shop->id)
-            ->where('sku', '!=', 'N/A')
-            ->whereNotNull('sku')
-            ->where('current_inventory', '<=', 0)
+        $outOfStockCount = Product::where('quantity', '<=', 0)
             ->count();
 
         return view('dashboard', [
             'products' => $products,
-            'shops' => collect([$shop]),
             'lowStockCount' => $lowStockCount,
             'outOfStockCount' => $outOfStockCount,
-            'lastSynced' => $shop->last_synced_at
+            'lastSynced' => Product::max('last_synced_at')
         ]);
     }
 
-    public function informAdmin(Request $request)
+    /**
+     * Update product quantity in local DB and Shopify
+     */
+    public function updateQuantity(Request $request)
     {
-        Log::info('informAdmin method triggered');
-        $user = Auth::user();
-        Log::info('User identified', ['email' => $user->email]);
+        $request->validate([
+            'product_id' => 'required|exists:products,id',
+            'quantity' => 'required|integer|min:0'
+        ]);
 
-        $storeDomain = config('services.shopify.store_domain');
-        $shop = Shop::where('shopify_domain', $storeDomain)->first();
+        $product = Product::findOrFail($request->input('product_id'));
+        $newQuantity = (int) $request->input('quantity');
 
-        if (!$shop) {
-            Log::warning('Shop not found for domain', ['domain' => $storeDomain]);
-            return redirect()->back()->with('error', 'Store not connected.');
-        }
-
-        // Get products with quantity <= 10
-        $lowStockProducts = Product::where('shop_id', $shop->id)
-            ->where('current_inventory', '<=', 10)
-            ->whereNotNull('sku')
-            ->where('sku', '!=', 'N/A')
-            ->get();
-
-        Log::info('Low stock products search', ['count' => $lowStockProducts->count()]);
-
-        if ($lowStockProducts->isEmpty()) {
-            return redirect()->back()->with('success', 'No low stock items found to report.');
-        }
+        Log::info('Start Quantity Update Process', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'new_quantity' => $newQuantity,
+            'location_id' => $product->location_id,
+        ]);
 
         try {
-            Log::info('Attempting to send mail to ' . $user->email);
-            // Send email to the CURRENTLY LOGGED IN user
-            \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\LowStockReport($lowStockProducts));
+            // 1. Update Shopify via GraphQL
+            if (empty($product->location_id)) {
+                Log::info('Location ID missing, fetching from Shopify...');
+                $restService = new RestService();
+                $locations = $restService->getLocations();
+                $locationId = $locations[0]['id'] ?? null;
+                if ($locationId) {
+                    $product->update(['location_id' => $locationId]);
+                    Log::info('Location ID updated', ['location_id' => $locationId]);
+                } else {
+                    throw new \Exception('No Shopify location found for this store.');
+                }
+            }
 
-            Log::info('Mail send command executed successfully');
-            return redirect()->back()->with('success', 'Low stock report sent successfully to ' . $user->email);
+            $graphQLService = new GraphQLService();
+            $result = $graphQLService->inventorySet(
+                $product->inventory_item_id,
+                $product->location_id,
+                $newQuantity
+            );
+
+            Log::info('GraphQL Sync Result', ['result' => $result]);
+
+            if (!empty($result['userErrors'])) {
+                $error = $result['userErrors'][0]['message'];
+                Log::error('Shopify Sync UserError', ['error' => $error, 'field' => $result['userErrors'][0]['field']]);
+                return redirect()->back()->with('error', 'Shopify Sync Error: ' . $error);
+            }
+
+            // 2. Handle local DB
+            if ($newQuantity > 20) {
+                $product->delete();
+                Log::info('Product removed from local DB (quantity > 20)');
+                $message = 'Quantity updated to ' . $newQuantity . '. Product removed from low stock list.';
+            } else {
+                $product->update([
+                    'quantity' => $newQuantity,
+                    'last_synced_at' => now()
+                ]);
+                Log::info('Local DB updated', ['new_quantity' => $newQuantity]);
+                $message = 'Quantity updated successfully to ' . $newQuantity . '.';
+
+                // 2b. Send Update Email
+                try {
+                    $users = \App\Models\User::all();
+                    foreach ($users as $user) {
+                        \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\QuantityUpdatedAlert([
+                            'product_title' => $product->product_title,
+                            'sku' => $product->sku,
+                            'variant_title' => $product->variant_title,
+                            'quantity' => $newQuantity,
+                            'inventory_item_id' => $product->inventory_item_id,
+                        ]));
+
+                        // Log Alert
+                        \App\Models\AlertLog::log($product->product_id, $user->email, 'update', $newQuantity);
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Failed to send update email', ['error' => $e->getMessage()]);
+                }
+            }
+
+            return redirect()->back()->with('success', $message);
+
         } catch (\Exception $e) {
-            Log::error('Failed to send low stock report', [
+            Log::error('Quantity update failed', [
+                'product_id' => $product->id,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'trace' => $e->getTraceAsString(),
             ]);
-            return redirect()->back()->with('error', 'Failed to send report: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Update failed: ' . $e->getMessage());
         }
     }
 
-    private function autoConnectStore(string $storeDomain, string $adminToken, $user)
+
+    /**
+     * Delete product from local DB and Shopify
+     */
+    public function deleteProduct(Request $request)
     {
-        // Test the connection
-        $restService = new RestService($storeDomain, $adminToken);
-        $shopInfo = $restService->getShopInfo();
-
-        // Create or update shop
-        $shop = Shop::updateOrCreate(
-            ['shopify_domain' => $storeDomain],
-            [
-                'name' => $shopInfo['name'] ?? $storeDomain,
-                'access_token' => $adminToken,
-                'email' => $shopInfo['email'] ?? 'unknown@example.com',
-                'shop_owner' => $shopInfo['shop_owner'] ?? 'Unknown',
-                'status' => 'active',
-            ]
-        );
-
-        // Attach to current user
-        $shop->users()->syncWithoutDetaching([
-            $user->id => ['role' => 'owner']
+        $request->validate([
+            'id' => 'required|exists:products,id',
         ]);
 
-        Log::info('Shop auto-connected', [
-            'shop_id' => $shop->id,
-            'shop_domain' => $storeDomain,
-            'user_id' => $user->id
+        $product = Product::findOrFail($request->input('id'));
+        $shopifyProductId = (string) $product->product_id;
+
+        Log::info('Start Product Deletion Process', [
+            'db_id' => $product->id,
+            'shopify_product_id' => $shopifyProductId,
+            'sku' => $product->sku,
         ]);
 
-        return $shop;
+        try {
+            // 1. Delete from Shopify via GraphQL
+            $graphQLService = new GraphQLService();
+            $result = $graphQLService->productDelete($shopifyProductId);
+
+            Log::info('GraphQL Delete Result', ['result' => $result]);
+
+            if (!empty($result['userErrors'])) {
+                $error = $result['userErrors'][0]['message'];
+                return redirect()->back()->with('error', 'Shopify Delete Error: ' . $error);
+            }
+
+            // 2. Send Deletion Alert
+            try {
+                $users = \App\Models\User::all();
+                foreach ($users as $user) {
+                    \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\ProductDeletedAlert([
+                        'product_title' => $product->product_title,
+                        'sku' => $product->sku,
+                        'variant_title' => $product->variant_title,
+                        'quantity' => $product->quantity,
+                        'inventory_item_id' => $product->inventory_item_id,
+                    ], 'Dashboard Manual Action'));
+
+                    // Log Alert
+                    \App\Models\AlertLog::log($product->product_id, $user->email, 'delete', $product->quantity);
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to send deletion email', ['error' => $e->getMessage()]);
+            }
+
+            // 3. Delete from local DB
+            $product->delete();
+            Log::info('Product deleted from local DB');
+
+            return redirect()->back()->with('success', 'Product deleted successfully from Shopify and local dashboard.');
+
+        } catch (\Exception $e) {
+            Log::error('Product deletion failed', [
+                'db_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+            return redirect()->back()->with('error', 'Deletion failed: ' . $e->getMessage());
+        }
     }
 
-    private function syncProducts(Shop $shop): void
-    {
-        // Dispatch sync job to queue
-        \App\Jobs\SyncShopifyProducts::dispatch($shop);
-
-        // Update last sync time
-        $shop->update(['last_synced_at' => now()]);
-
-        Log::info('Product sync initiated', ['shop' => $shop->shopify_domain]);
-    }
 
     public function manualSync(Request $request)
     {
-        $storeDomain = config('services.shopify.store_domain');
-        $shop = Shop::where('shopify_domain', $storeDomain)->first();
-
-        if (!$shop) {
-            Log::error('Manual Sync: Shop not found', ['domain' => $storeDomain]);
-            return redirect()->route('dashboard')
-                ->with('error', 'Store not found. Please check your .env configuration.');
-        }
-
-        $this->syncProducts($shop);
-
-        return redirect()->route('dashboard')
-            ->with('success', 'Product sync initiated. Please refresh in a few moments.');
+        \App\Jobs\SyncShopifyProducts::dispatch();
+        return redirect()->route('dashboard')->with('success', 'Product sync initiated.');
     }
 }

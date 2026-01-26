@@ -9,30 +9,31 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class LowStockAlert extends Mailable
+class ProductDeletedAlert extends Mailable
 {
     use Queueable, SerializesModels;
 
-    public $product;
-    public $currentInventory;
-    public $threshold;
+    public $productTitle;
     public $sku;
     public $variantTitle;
-    public $productTitle;
+    public $quantity;
     public $inventoryItemId;
+    public $deletedFrom;
 
     /**
      * Create a new message instance.
+     *
+     * @param array $details
+     * @param string $deletedFrom 'Shopify Webhook' or 'Dashboard Manual Action'
      */
-    public function __construct($details)
+    public function __construct(array $details, string $deletedFrom = 'Shopify')
     {
-        $this->product = $details['product_model'] ?? null;
-        $this->currentInventory = $details['available'] ?? 0;
-        $this->threshold = $details['threshold'] ?? 0;
+        $this->productTitle = $details['product_title'] ?? 'Unknown Product';
         $this->sku = $details['sku'] ?? 'N/A';
         $this->variantTitle = $details['variant_title'] ?? 'N/A';
-        $this->productTitle = $details['product_title'] ?? 'Unknown Product';
+        $this->quantity = $details['quantity'] ?? 0;
         $this->inventoryItemId = $details['inventory_item_id'] ?? 'N/A';
+        $this->deletedFrom = $deletedFrom;
     }
 
     /**
@@ -41,7 +42,7 @@ class LowStockAlert extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Low Stock Alert: ' . $this->productTitle . ' (' . $this->sku . ')',
+            subject: 'Product Deleted: ' . $this->productTitle . ' (' . $this->sku . ')',
         );
     }
 
@@ -51,7 +52,7 @@ class LowStockAlert extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'emails.low-stock',
+            view: 'emails.product-deleted',
         );
     }
 

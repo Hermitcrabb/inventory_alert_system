@@ -7,11 +7,13 @@
 
 <body>
     <h1>Low Stock Alert</h1>
-    <p>The following product has dropped below the threshold:</p>
+    <p>The following product needs attention:</p>
     <ul>
-        <li><strong>Product:</strong> {{ $product->title }}</li>
-        <li><strong>Current Inventory:</strong> {{ $currentInventory }}</li>
-        <li><strong>Threshold:</strong> {{ $threshold }}</li>
+        <li><strong>Product Title:</strong> {{ $productTitle }}</li>
+        <li><strong>Variant:</strong> {{ $variantTitle }}</li>
+        <li><strong>SKU:</strong> {{ $sku }}</li>
+        <!-- <li><strong>Inventory Item ID:</strong> {{ $inventoryItemId }}</li> -->
+        <li><strong>Available Quantity:</strong> {{ $currentInventory }}</li>
     </ul>
     <p>Please restock immediately.</p>
 </body>

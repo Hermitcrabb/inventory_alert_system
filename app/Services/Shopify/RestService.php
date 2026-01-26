@@ -48,14 +48,6 @@ class RestService extends BaseShopifyService
         return true;
     }
 
-    public function getShopInfo(): array
-    {
-        $this->rateLimitCheck('rest');
-
-        $response = $this->makeRequest('get', 'admin/api/2024-01/shop.json');
-        return $response['shop'] ?? [];
-    }
-
     /**
      * Get single inventory item via REST
      */

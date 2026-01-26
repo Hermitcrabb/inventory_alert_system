@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Product extends Model
@@ -12,39 +11,27 @@ class Product extends Model
     use HasFactory;
 
     protected $fillable = [
-        'shop_id',
-        'shopify_product_id',
-        'shopify_variant_id',
-        'title',
-        'handle',
-        'sku',
-        'size',
-        'current_inventory',
+        'product_id',
+        'variant_id',
         'inventory_item_id',
-        'product_type',
-        'vendor',
-        'status',
-        'price',
-        'compare_at_price',
+        'product_title',
+        'variant_title',
+        'sku',
+        'quantity',
+        'location_id',
+        'last_notified_threshold',
+        'last_notified_threshold_group',
         'last_synced_at',
     ];
 
     protected $casts = [
-        'current_inventory' => 'integer',
-        'price' => 'decimal:2',
-        'compare_at_price' => 'decimal:2',
+        'product_id' => 'integer',
+        'variant_id' => 'integer',
+        'quantity' => 'integer',
+        'last_notified_threshold' => 'integer',
+        'last_notified_threshold_group' => 'integer',
         'last_synced_at' => 'datetime',
     ];
-
-    public function shop(): BelongsTo
-    {
-        return $this->belongsTo(Shop::class);
-    }
-
-    public function thresholds(): HasMany
-    {
-        return $this->hasMany(InventoryThreshold::class);
-    }
 
     public function alerts(): HasMany
     {
@@ -53,11 +40,6 @@ class Product extends Model
 
     public function scopeLowStock($query)
     {
-        return $query->where('current_inventory', '<=', 20);
-    }
-
-    public function scopeActive($query)
-    {
-        return $query->where('status', 'active');
+        return $query->where('quantity', '<=', 20);
     }
 }

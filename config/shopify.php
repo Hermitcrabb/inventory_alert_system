@@ -14,10 +14,10 @@ return [
         'write_products',
     ],
     'redirect_uri' => env('SHOPIFY_REDIRECT_URI', '/shopify/callback'),
-    
+
     // Rate limiting
     'rate_limit' => [
-        'rest' => 40, // requests per minute
+        'rest' => 120, // requests per minute
         'graphql' => 1000, // cost per minute
         'retry_after' => 2, // seconds
     ],

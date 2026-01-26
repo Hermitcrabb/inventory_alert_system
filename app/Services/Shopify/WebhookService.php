@@ -3,30 +3,18 @@
 namespace App\Services\Shopify;
 
 use Illuminate\Support\Facades\Log;
-use App\Models\Shop;
 
 class WebhookService extends RestService
 {
     /**
-     * Register all required webhooks for a shop
-     * Override parent method with different signature
+     * Register all required webhooks for the single shop
      */
-    public function registerWebhooksForShop(Shop $shop): array
+    public function registerWebhooksForSingleShop(): array
     {
         $webhooks = [
             [
                 'topic' => 'inventory_levels/update',
                 'address' => $this->getWebhookUrl('inventory-update'),
-                'format' => 'json'
-            ],
-            [
-                'topic' => 'products/create',
-                'address' => $this->getWebhookUrl('product-create'),
-                'format' => 'json'
-            ],
-            [
-                'topic' => 'products/update',
-                'address' => $this->getWebhookUrl('product-update'),
                 'format' => 'json'
             ],
             [
@@ -48,14 +36,12 @@ class WebhookService extends RestService
                 ];
 
                 Log::info('Webhook registered', [
-                    'shop' => $shop->shopify_domain,
                     'topic' => $webhook['topic'],
                     'address' => $webhook['address']
                 ]);
 
             } catch (\Exception $e) {
                 Log::error('Failed to register webhook', [
-                    'shop' => $shop->shopify_domain,
                     'topic' => $webhook['topic'],
                     'error' => $e->getMessage()
                 ]);
@@ -69,14 +55,6 @@ class WebhookService extends RestService
         }
 
         return $results;
-    }
-
-    /**
-     * Keep parent method compatibility
-     */
-    public function registerWebhooks(array $webhooks): array
-    {
-        return parent::registerWebhooks($webhooks);
     }
 
     /**
@@ -98,10 +76,8 @@ class WebhookService extends RestService
      */
     private function getWebhookUrl(string $type): string
     {
-        // Priority: 1. NGROK_URL from .env, 2. APP_URL
         $baseUrl = config('services.shopify.ngrok_url') ?: config('app.url');
 
-        // Default to localhost if nothing set
         if (!$baseUrl) {
             $baseUrl = 'http://localhost';
         }
