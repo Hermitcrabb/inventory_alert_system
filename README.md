@@ -1,59 +1,186 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Inventory Alert System
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A Laravel-based application that monitors product inventory levels and sends **email notifications (with CC)** when stock falls below a user-defined threshold. Alert delivery is handled using Laravel’s **queue system** to ensure non-blocking, scalable processing.
 
-## About Laravel
+Repository: [https://github.com/Hermitcrabb/inventory_alert_system](https://github.com/Hermitcrabb/inventory_alert_system)
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 🚀 Overview
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+The **Inventory Alert System** is designed to help businesses track inventory in real time and automatically notify responsible parties when stock levels become critically low. The system supports configurable thresholds per product and processes notifications asynchronously using queues.
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## ✨ Features
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+* 📦 Product inventory tracking
+* 🎯 User-defined low-stock alert thresholds
+* 📧 Email notification system with CC support
+* 🔁 Queue-based alert processing
+* 🧾 Alert logging to prevent unnecessary duplicates
+* 🛠 Built using standard Laravel architecture
 
-## Laravel Sponsors
+---
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## 📂 Project Structure
 
-### Premium Partners
+```
+inventory_alert_system/
+├── app/
+│   ├── Console/
+│   ├── Events/
+│   ├── Http/
+│   │   └── Controllers/
+│   ├── Jobs/
+│   ├── Listeners/
+│   ├── Mail/
+│   ├── Models/
+│   └── Notifications/
+├── bootstrap/
+├── config/
+├── database/
+│   ├── migrations/
+│   └── seeders/
+├── public/
+├── resources/
+├── routes/
+│   └── web.php
+├── storage/
+├── tests/
+├── .env.example
+├── artisan
+├── composer.json
+└── README.md
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+This structure follows standard Laravel conventions. Inventory checks, queued jobs, and notifications are implemented within the appropriate `Jobs`, `Notifications`, and `Mail` directories.
 
-## Contributing
+---
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## ⚙️ Installation & Setup
 
-## Code of Conduct
+### 1. Clone the Repository
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+git clone https://github.com/Hermitcrabb/inventory_alert_system.git
+cd inventory_alert_system
+```
 
-## Security Vulnerabilities
+### 2. Install Dependencies
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+composer install
+```
 
-## License
+### 3. Environment Configuration
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Update your database and mail settings in `.env`:
+
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=inventory_alert_system
+DB_USERNAME=root
+DB_PASSWORD=
+
+QUEUE_CONNECTION=database
+
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.mailtrap.io
+MAIL_PORT=2525
+MAIL_USERNAME=your_username
+MAIL_PASSWORD=your_password
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS=alerts@example.com
+MAIL_FROM_NAME="Inventory Alert System"
+```
+
+---
+
+## 🗄️ Database Setup
+
+Run migrations:
+
+```bash
+php artisan migrate
+```
+
+(Optional) Seed sample data:
+
+```bash
+php artisan db:seed
+```
+
+---
+
+## 🔁 Queue-Based Alert Processing
+
+This application uses Laravel’s queue system to process alert notifications asynchronously.
+
+* Inventory updates trigger an alert check
+* If the threshold condition is met, a **queued job** is dispatched
+* The queue worker handles email delivery in the background
+
+Run the queue worker using:
+
+```bash
+php artisan queue:work
+```
+
+This ensures inventory updates are fast and non-blocking.
+
+---
+
+## 📨 Email Notification Logic
+
+* Each product defines:
+
+  * `available_quantity`
+  * `alert_threshold`
+
+* When `available_quantity <= alert_threshold`:
+
+  * A notification job is dispatched to the queue
+  * An email alert is sent to the primary recipient
+  * Additional stakeholders are included using **CC**
+
+Duplicate alerts can be controlled by tracking the last notified quantity or alert state.
+
+---
+
+## 🧪 Testing
+
+Run the test suite using:
+
+```bash
+php artisan test
+```
+
+---
+
+## 🚧 Future Enhancements
+
+* 📱 SMS notifications via third-party providers
+* 📊 Admin dashboard for managing products and thresholds
+* 📈 Alert history and reporting
+* 🔐 Role-based access control
+
+---
+
+## 📄 License
+
+This project is open-source and licensed under the **MIT License**.
+
+---
+
+## 👤 Author
+
+**Pratham Bhandari**
+GitHub: [https://github.com/Hermitcrabb](https://github.com/Hermitcrabb)
